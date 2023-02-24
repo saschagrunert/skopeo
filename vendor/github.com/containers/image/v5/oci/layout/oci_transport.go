@@ -3,6 +3,7 @@ package layout
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,7 +17,6 @@ import (
 	"github.com/containers/image/v5/types"
 	"github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
 )
 
 func init() {
@@ -179,35 +179,25 @@ func (ref ociReference) getManifestDescriptor() (imgspecv1.Descriptor, error) {
 		return imgspecv1.Descriptor{}, err
 	}
 
-	var d *imgspecv1.Descriptor
 	if ref.image == "" {
 		// return manifest if only one image is in the oci directory
-		if len(index.Manifests) == 1 {
-			d = &index.Manifests[0]
-		} else {
+		if len(index.Manifests) != 1 {
 			// ask user to choose image when more than one image in the oci directory
 			return imgspecv1.Descriptor{}, ErrMoreThanOneImage
 		}
+		return index.Manifests[0], nil
 	} else {
 		// if image specified, look through all manifests for a match
 		for _, md := range index.Manifests {
 			if md.MediaType != imgspecv1.MediaTypeImageManifest && md.MediaType != imgspecv1.MediaTypeImageIndex {
 				continue
 			}
-			refName, ok := md.Annotations[imgspecv1.AnnotationRefName]
-			if !ok {
-				continue
-			}
-			if refName == ref.image {
-				d = &md
-				break
+			if refName, ok := md.Annotations[imgspecv1.AnnotationRefName]; ok && refName == ref.image {
+				return md, nil
 			}
 		}
 	}
-	if d == nil {
-		return imgspecv1.Descriptor{}, fmt.Errorf("no descriptor found for reference %q", ref.image)
-	}
-	return *d, nil
+	return imgspecv1.Descriptor{}, ImageNotFoundError{ref}
 }
 
 // LoadManifestDescriptor loads the manifest descriptor to be used to retrieve the image name
@@ -215,7 +205,7 @@ func (ref ociReference) getManifestDescriptor() (imgspecv1.Descriptor, error) {
 func LoadManifestDescriptor(imgRef types.ImageReference) (imgspecv1.Descriptor, error) {
 	ociRef, ok := imgRef.(ociReference)
 	if !ok {
-		return imgspecv1.Descriptor{}, errors.Errorf("error typecasting, need type ociRef")
+		return imgspecv1.Descriptor{}, errors.New("error typecasting, need type ociRef")
 	}
 	return ociRef.getManifestDescriptor()
 }
@@ -234,7 +224,7 @@ func (ref ociReference) NewImageDestination(ctx context.Context, sys *types.Syst
 
 // DeleteImage deletes the named image from the registry, if supported.
 func (ref ociReference) DeleteImage(ctx context.Context, sys *types.SystemContext) error {
-	return errors.Errorf("Deleting images not implemented for oci: images")
+	return errors.New("Deleting images not implemented for oci: images")
 }
 
 // ociLayoutPath returns a path for the oci-layout within a directory using OCI conventions.
@@ -250,7 +240,7 @@ func (ref ociReference) indexPath() string {
 // blobPath returns a path for a blob within a directory using OCI image-layout conventions.
 func (ref ociReference) blobPath(digest digest.Digest, sharedBlobDir string) (string, error) {
 	if err := digest.Validate(); err != nil {
-		return "", errors.Wrapf(err, "unexpected digest reference %s", digest)
+		return "", fmt.Errorf("unexpected digest reference %s: %w", digest, err)
 	}
 	blobDir := filepath.Join(ref.dir, "blobs")
 	if sharedBlobDir != "" {
